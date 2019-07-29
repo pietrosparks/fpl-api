@@ -7,6 +7,8 @@ module.exports = api => {
   api.get('/fpl/user/group/:id', AuthController.getGroup)
   api.post('/fpl/group/new', AuthController.createPaymentGroup)
   api.get('/update/events', AuthController.checkForNewResults)
-  api.get('/create/bank', AuthController.createBank)
+  // api.get('/create/bank', AuthController.createBank)
+  api.get('/create/recipient', AuthController.getPaystackRecipients);
+  api.get('/pay', AuthController.payWinners);
   
 };

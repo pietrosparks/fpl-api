@@ -28,6 +28,12 @@ const paymentSchema = Schema({
         type: String,
         enum:['pending','success', 'failed'],
         default: 'pending'
+    },
+    gw:{
+        type: String
+    },
+    recipient_code: {
+        type: String
     }
 },{
     timestamp: true

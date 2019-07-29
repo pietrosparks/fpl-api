@@ -18,7 +18,11 @@ const groupSchema = Schema(
     groupAdmin: {
       type: String,
       required: true
-    }, 
+    },
+    adminUserRef:{
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
     collectionAmount: {
       type: String,
       required: true
@@ -49,6 +53,9 @@ const groupSchema = Schema(
       default: false
     },
     paystackReference: {
+      type: String
+    },
+    invite:{
       type: String
     }
   },

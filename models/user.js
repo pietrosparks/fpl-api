@@ -6,6 +6,12 @@ const userSchema = Schema({
     email: {
         type: String
     },
+    alias:{
+        type: String
+    },
+    name: {
+        type: String
+    },
     accountNumber:{
         type: String
     },
@@ -15,9 +21,6 @@ const userSchema = Schema({
     bank: {
         type: Schema.Types.ObjectId,
         ref: 'Bank'
-    },
-    password: {
-        type: String
     }
 }, {
     timestamps: true

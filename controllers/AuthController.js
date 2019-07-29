@@ -1,21 +1,38 @@
-const request = require('request-promise');
-const promise = require('bluebird');
-const _ = require('lodash');
-const { response, hasher } = require('../utils');
-const PaymentService = require('../services/PaymentService');
-const Groups = require('../models/groups');
-const Events = require('../models/events');
-const Users = require('../models/user');
-const Bank = require('../models/bank');
+const request = require('request-promise')
+const promise = require('bluebird')
+const _ = require('lodash')
+const { response, hasher, responseError } = require('../utils')
+const PaymentService = require('../services/PaymentService')
+const Groups = require('../models/groups')
+const Events = require('../models/events')
+const Users = require('../models/user')
+const Payments = require('../models/payments')
+const Wallet = require('../models/wallet')
+
+const generalQuery = {
+  uri: 'https://fantasy.premierleague.com/drf',
+  method: 'GET',
+  resolveWithFullResponse: true,
+  simple: true,
+  json: true,
+  headers: {}
+}
 
 const cookieParse = (cookies, cookie) => {
-  const re = new RegExp(cookie, 'g');
-  return cookies
+  const re = new RegExp(cookie, 'g')
+  const cook = cookies
     .find(c => c.match(re))
-    .split(';')[0]
-    .split('=')[1]
-    .replace(/[/"]+/g, '');
-};
+    .split('; ')[0]
+    .replace(/[/"]+/g, '')
+  console.log(cook, 'cook')
+  return cook
+  // .split('=')[1]
+}
+
+const loginCheck = link => {
+  const re = new RegExp('success', 'g')
+  return link.match(re)
+}
 
 const getNewEvents = () => {
   const event = {
@@ -23,10 +40,10 @@ const getNewEvents = () => {
     method: 'GET',
     simple: true,
     json: true
-  };
+  }
 
-  return request(event).then(r => r);
-};
+  return request(event).then(r => r)
+}
 
 const getNewStandings = data => {
   const standings = {
@@ -34,14 +51,14 @@ const getNewStandings = data => {
     method: 'GET',
     simple: true,
     json: true
-  };
-  return request(standings).then(s => s);
-};
+  }
+  return request(standings).then(s => s)
+}
 
 class AuthController {
   login(req, res) {
     //Login to get sessionId cookie
-    const { email, password } = req.body;
+    const { email, password } = req.body
 
     const loginQry = {
       uri: 'https://users.premierleague.com/accounts/login/',
@@ -59,200 +76,235 @@ class AuthController {
       },
       json: true,
       simple: true
-    };
+    }
 
-    request(loginQry).catch(err => {
-      if (err.statusCode === 302) {
-        const cookies = err.response.headers['set-cookie'];
-        const pl_profile = cookieParse(cookies, 'pl_profile') + '=';
-
-        const mainOptions = {
-          uri: 'https://fantasy.premierleague.com/',
-          method: 'GET',
-          resolveWithFullResponse: true,
-          simple: true,
-          json: true,
-          headers: {
-            Cookie: `pl_profile="${pl_profile}";`
+    request(loginQry)
+      .catch(err => {
+        if (err.statusCode === 302) {
+          if (!err.response.headers['set-cookie']) {
+            return response(403, 'error', res, 'Unauthorized', err)
           }
-        };
 
-        const firstQry = _.clone(mainOptions);
-        firstQry.uri += 'a/team/my';
+          const cookies = err.response.headers['set-cookie']
 
-        const secondQry = _.clone(mainOptions);
-        secondQry.uri += 'a/login';
+          const pl_profile = cookieParse(cookies, 'pl_profile')
 
-        return request(firstQry).then(resp => {
-          const sessionid = cookieParse(
-            resp.headers['set-cookie'],
-            'sessionid'
-          );
-          secondQry.headers.Cookie += `sessionid="${sessionid}";`;
+          const mainOptions = {
+            uri: 'https://fantasy.premierleague.com/',
+            method: 'GET',
+            resolveWithFullResponse: true,
+            simple: true,
+            json: true,
+            headers: {
+              Cookie: `${pl_profile}`
+            }
+          }
 
-          return request(secondQry).then(respy => {
-            const csrftoken = cookieParse(
-              respy.headers['set-cookie'],
-              'csrftoken'
-            );
+          const firstQry = _.clone(mainOptions)
+          firstQry.uri += 'a/team/my'
 
-            Users.findOrCreate(
-              { email: email },
-              {
-                password: hasher({ password })
-              }
-            ).then(user => {
-              return response(
-                200,
-                'success',
-                res,
-                'User successfully logged in',
-                {
-                  csrftoken,
-                  sessionid,
-                  pl_profile,
-                  user: user.email
-                }
-              );
-            });
-          });
-        });
-      }
+          const secondQry = _.clone(mainOptions)
+          secondQry.uri += 'a/login'
 
-      return response(403, 'error', res, 'Unauthorized', err);
-    });
+          return request(firstQry).then(resp => {
+            const sessionid = cookieParse(
+              resp.headers['set-cookie'],
+              'sessionid'
+            )
+            secondQry.headers.Cookie += `${sessionid};`
+
+            return request(secondQry)
+              .then(respy => {
+                const csrftoken = cookieParse(
+                  respy.headers['set-cookie'],
+                  'csrftoken'
+                )
+
+                Users.findOrCreate(
+                  { email: email },
+                  {
+                    password: hasher(password)
+                  }
+                ).then(user => {
+                  return response(
+                    200,
+                    'success',
+                    res,
+                    'User successfully logged in',
+                    {
+                      csrftoken,
+                      sessionid,
+                      pl_profile,
+                      user: user.email
+                    }
+                  )
+                })
+              })
+              .catch(err => {
+                return responseError(err, res)
+              })
+          })
+        }
+        return response(403, 'error', res, 'Unauthorized', err)
+      })
+      .catch(err => responseError(err, res))
   }
 
   getUser(req, res) {
-    const { pl_profile, sessionid, csrftoken } = req.headers;
+    const { pl_profile, sessionid, csrftoken } = req.headers
+    const cookieString = `${pl_profile}; ${sessionid}; ${csrftoken}`
+    const query = _.clone(generalQuery)
+    query.uri += '/bootstrap-dynamic'
+    query.headers.Cookie = cookieString
 
-    const query = {
-      uri: 'https://fantasy.premierleague.com/drf/bootstrap-dynamic',
-      method: 'GET',
-      resolveWithFullResponse: true,
-      simple: true,
-      json: true,
-      headers: {
-        Cookie: `pl_profile="${pl_profile}"; sessionid=${sessionid}; csrftoken=${csrftoken}`
-      }
-    };
-
-    request(query).then(resp => {
-      if (resp) {
-        return response(200, 'success', res, 'Retrieved User Info', resp);
-      }
-      return response(404, 'error', res, 'Error while retrieving User', e);
-    });
+    request(query)
+      .then(resp => {
+        return response(200, 'success', res, 'Retrieved User Info', resp)
+      })
+      .catch(err => responseError(err, res))
   }
 
   getGroups(req, res) {
-    const { pl_profile, sessionid, csrftoken } = req.headers;
-    const { id } = req.params;
+    const { pl_profile, sessionid, csrftoken } = req.headers
+    const { id } = req.params
 
-    const query = {
-      uri: `https://fantasy.premierleague.com/drf/leagues-entered/${id}`,
-      method: 'GET',
-      simple: true,
-      json: true,
-      headers: {
-        Cookie: `pl_profile="${pl_profile}"; sessionid=${sessionid}; csrftoken=${csrftoken}`
-      }
-    };
+    const cookieString = `${pl_profile}; ${sessionid}; ${csrftoken}`
+    const query = _.clone(generalQuery)
+    query.uri += `/leagues-entered/${id}`
+    query.headers.Cookie = cookieString
+    query.resolveWithFullResponse = false
 
-    return request(query).then(resp => {
-      if (resp) {
-        return response(200, 'success', res, 'Retrieved User Info', resp);
-      }
-      return response(404, 'error', res, 'Error while retrieving User', e);
-    });
+    return request(query)
+      .then(resp => {
+        return response(200, 'success', res, 'Retrieved User Info', resp)
+      })
+      .catch(err => responseError(err, res))
   }
 
   getGroup(req, res) {
-    const { pl_profile, sessionid, csrftoken } = req.headers;
-    const { id } = req.params;
+    const { pl_profile, sessionid, csrftoken } = req.headers
+    const { id } = req.params
 
-    const leagueQuery = {
-      uri: `https://fantasy.premierleague.com/drf/leagues-classic-standings/${id}`,
-      method: 'GET',
-      simple: true,
-      json: true,
-      headers: {
-        Cookie: `pl_profile="${pl_profile}"; sessionid=${sessionid}; csrftoken=${csrftoken}`
-      }
-    };
-    const eventQuery = _.clone(leagueQuery);
-    eventQuery.uri = 'https://fantasy.premierleague.com/drf/events/';
+    const cookieString = `${pl_profile}; ${sessionid}; ${csrftoken}`
+    const leagueQuery = _.clone(generalQuery)
+    leagueQuery.uri += `/leagues-classic-standings/${id}`
+    leagueQuery.headers.Cookie = cookieString
+    leagueQuery.resolveWithFullResponse = false
 
-    promise
+    const eventQuery = _.clone(leagueQuery)
+    eventQuery.uri = 'https://fantasy.premierleague.com/drf/events/'
+
+    return promise
       .all([request(leagueQuery), request(eventQuery)])
       .spread((league, event) => {
-        if (league) {
-          league.events = event;
-          return Groups.findOne({ groupId: id }).then(group => {
-            if (group) {
-              league.groupData = group;
-            } else {
-              league.groupData = null;
-            }
-            return response(200, 'success', res, 'Retrieved User Info', league);
-          });
-        }
-        return response(404, 'error', res, 'Error while retrieving User');
-      });
+        league.events = event
+        return Groups.findOne({ groupId: id }).then(group => {
+          if (group) {
+            league.groupData = group
+          } else {
+            league.groupData = null
+          }
+          return response(200, 'success', res, 'Retrieved User Info', league)
+        })
+      })
+      .catch(err => responseError(err, res))
   }
 
   createPaymentGroup(req, res) {
-    let newGroupQuery;
-    const { body } = req;
-    Groups.findOne({ groupId: body.groupId }).then(g => {
-      if (_.isNull(g)) {
-        const newGroup = new Groups(body);
-        newGroupQuery = newGroup.save();
+    // let newGroupQuery
+    const {
+      groupId,
+      collectionAmount,
+      adminMail,
+      name,
+      groupAdmin,
+      started,
+      adminAlias,
+      adminTeamId,
+      adminName
+    } = req.body
+    // Groups.findOne({ groupId: groupId }).then(g => {
+    //   if (_.isNull(g)) {
+    //     newGroupQuery = new Groups(req.body).save()
+    //   }
+
+    const initializeQry = PaymentService.initializeTransaction({
+      amount: 10000,
+      email: 'pietrosparks@gmail.com' || adminMail,
+      metadata: {
+        chargeAmount: collectionAmount,
+        userEmail: adminMail,
+        userAlias: adminAlias,
+        userName: adminName,
+        userTeamId: adminTeamId,
+        groupId: groupId,
+        groupName: name,
+        groupAdmin,
+        started,
+        type: 'admin-user-setup'
       }
+    })
 
-      const initializeQry = PaymentService.initializeTransaction({
-        amount: body.totalAmount,
-        email: body.adminMail,
-        metadata: {
-          chargeAmount: body.totalAmount,
-          userEmail: body.adminEmail,
-          groupId: body.groupId,
-          groupName: body.name,
-          type: 'group-credit-setup'
-        }
-      });
-
-      return promise
-        .all([initializeQry, newGroupQuery])
-        .spread(init => {
-          return response(
-            200,
-            'success',
-            res,
-            'Successfully created Group',
-            init
-          );
-        })
-        .catch(err => {
-          return response(
-            500,
-            'error',
-            res,
-            'Error while creating payment',
-            err
-          );
-        });
-    });
+    return initializeQry
+      .then(initLink => {
+        console.log(initLink, 'initlink')
+        return response(
+          200,
+          'success',
+          res,
+          'Successfully created Group',
+          initLink
+        )
+      })
+      .catch(err => responseError(err, res))
+    // })
   }
 
-  createBank(req, res){
-    const newBank = new Bank({
-     
-      code : "058",
-      name : "Guaranty Trust Bank",
-  })
-    newBank.save()
-    res.send("doneee")
+  async getPaystackRecipients(req, res) {
+    Payments.find({ status: 'pending' })
+      .populate('bank')
+      .then(pay => {
+        const assignWinnersRecipientCode = pay.map(async p => {
+          p.recipient_code = (await PaymentService.initializeTransferRecipient(
+            p
+          )).data.recipient_code
+          return p.save()
+        })
+
+        promise
+          .all(assignWinnersRecipientCode)
+          .then(recipient => {
+            return response(
+              200,
+              'success',
+              res,
+              'Successfully gotten recepient codes',
+              recipient
+            )
+          })
+          .catch(err => responseError(err, res))
+      })
+  }
+
+  async payWinners(req, res) {
+    Payments.find({
+      status: 'pending',
+      recipient_code: {
+        $ne: null
+      }
+    })
+      .populate('bank')
+      .then(payment => {
+        Wallet.find({ groupId: payment.map(p => p.groupId) }).then(wallet => {
+          const allPayments = payment.map(p => {
+            return PaymentService.transferFunds(p)
+          })
+          promise.all(allPayments).then(resp => {
+            console.log(resp, 'Winners Have Been Paid Successfully')
+          })
+        })
+      })
+      .catch(err => responseError(err, res))
   }
 
   async checkForNewResults(req, res) {
@@ -263,38 +315,33 @@ class AuthController {
             Events({ events: e })
               .save()
               .then(() => {
-                return response(
-                  200,
-                  'success',
-                  res,
-                  'Successfully Updated Events'
-                );
-              });
-          });
+                return
+              })
+          })
         }
-        const latestGameWeek = event.events.find(
-          g => g.finished && g.data_checked && g.is_current
-        );
+        const latestGW = event.events.find(g => g.is_current)
 
         return getNewEvents().then(e => {
-          const mostUpdated = e.find(
-            g => g.finished && g.data_checked && g.is_current
-          );
+          const updatedGW = e.find(g => g.is_current)
+          if (!updatedGW) {
+            return response(404, 'error', res, 'No Payments Ready')
+          }
+
           //change back. test environment
           if (
-            latestGameWeek.id === mostUpdated.id
+            latestGW.id
+            // === (mostUpdated.id + 1)
             // mostUpdated.id === latestGameWeek.id
           ) {
             return Groups.find({ paymentActive: true }).then(grp => {
-              const groupIds = grp.map(g => {
-                return getNewStandings(g.groupId);
-              });
+              const groupIds = grp.map(g => getNewStandings(g.groupId))
               //Need lots of commenting here
+
               promise.all(groupIds).then(g => {
                 const currentGrp = g.map(gr => {
                   const tempGroup = grp.find(
                     data => data.groupId == gr.league.id
-                  );
+                  )
                   tempGroup.members = gr.standings.results.map(group => {
                     return {
                       player_name: group.player_name,
@@ -302,32 +349,64 @@ class AuthController {
                       team_id: group.entry,
                       started: group.start_event,
                       rank: group.rank,
-                      event_total: group.event_total
-                    };
-                  });
-                  return tempGroup.save();
-                });
-                promise.all(currentGrp).then((result) => {
-                  result.forEach(data => {
-                   const sorted = data.members.sort((a, b) => b.event_total - a.event_total);
-                   if(data.prizeShare){
-                     const slicedRecipientArray = sorted.slice(0, data.prizeShare);
-                     const obj ={
-                       sliced: slicedRecipientArray,
-                       full: sorted,
-                       amount: data.collectionAmount
-                     }
-                     return PaymentService.createRecipients(slicedRecipientArray, obj, data.groupId)
-                   }
+                      event_total: group.event_total,
+                      current_gw: mostUpdated.id
+                    }
                   })
-                });
-              });
-            });
+                  return tempGroup.save()
+                })
+
+                promise.all(currentGrp).then(result => {
+                  result.forEach(data => {
+                    const sorted = data.members.sort(
+                      (a, b) => b.event_total - a.event_total
+                    )
+                    if (data.prizeShare) {
+                      const slicedRecipientArray = sorted.slice(
+                        0,
+                        data.prizeShare
+                      )
+                      const obj = {
+                        sliced: slicedRecipientArray,
+                        full: sorted,
+                        amount: data.collectionAmount
+                      }
+
+                      const createRecipientsQuery = PaymentService.createRecipients(
+                        slicedRecipientArray,
+                        obj,
+                        data.groupId,
+                        updatedGW.id
+                      )
+
+                      //Update Events
+                      const updateEventsQry = Events({
+                        events: event.events
+                      }).save()
+
+                      promise
+                        .all([createRecipientsQuery, updateEventsQry])
+                        .spread(recipient => {
+                          return response(
+                            200,
+                            'success',
+                            res,
+                            `${
+                              recipient.length
+                            } Payment recipients were created`,
+                            recipient
+                          )
+                        })
+                    }
+                  })
+                })
+              })
+            })
           }
-        });
+        })
       })
-      .catch(err => {});
+      .catch(err => responseError(err, res))
   }
 }
 
-module.exports = new AuthController();
+module.exports = new AuthController()
